@@ -10,6 +10,9 @@ import org.springframework.stereotype.Service;
 import javax.crypto.SecretKey;
 import java.time.Instant;
 import java.util.Date;
+import java.util.Optional;
+import java.util.UUID;
+
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
@@ -21,28 +24,41 @@ public class JwtService {
     @Value("${app.jwt.secret}")
     private String secret;
 
-    @Value("${app.jwt.expiration-ms}")
-    private long expirationMs;
+    @Value("${app.jwt.access-token-expiry-ms}")
+    private long accessTokenExpiryMs;       // 15 minutes
+
+    @Value("${app.jwt.refresh-token-expiry-ms}")
+    private long refreshTokenExpiryMs;      // 7 days
 
     private SecretKey signingKey() {
         byte[] keyBytes = Decoders.BASE64.decode(secret);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
-    public String issueToken(User user) {
+    public String issueAccessToken(User user) {
+        return buildToken(user, accessTokenExpiryMs, "access");
+    }
+
+    public String issueRefreshToken(User user) {
+        // Refresh token carries minimal claims — just enough to re-identify
+        return buildToken(user, refreshTokenExpiryMs, "refresh");
+    }
+
+    private String buildToken(User user, long expiryMs, String type) {
         Instant now = Instant.now();
         return Jwts.builder()
                 .subject(user.getId().toString())
                 .claim("login", user.getLogin())
                 .claim("avatar", user.getAvatarUrl())
+                .claim("type", type)          // distinguish access vs refresh
                 .issuedAt(Date.from(now))
-                .expiration(Date.from(now.plusMillis(expirationMs)))
+                .expiration(Date.from(now.plusMillis(expiryMs)))
                 .signWith(signingKey())
                 .compact();
     }
 
     public Claims validateAndParse(String token) {
-         return Jwts.parser()
+        return Jwts.parser()
                 .verifyWith(signingKey())
                 .build()
                 .parseSignedClaims(token)
@@ -55,6 +71,26 @@ public class JwtService {
             return true;
         } catch (JwtException | IllegalArgumentException e) {
             log.warn("Invalid JWT: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    // Extract user ID without throwing — used in refresh flow
+    public Optional<UUID> extractUserId(String token) {
+        try {
+            String subject = validateAndParse(token).getSubject();
+            return Optional.of(UUID.fromString(subject));
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    // Confirm the token is specifically a refresh token
+    public boolean isRefreshToken(String token) {
+        try {
+            String type = (String) validateAndParse(token).get("type");
+            return "refresh".equals(type);
+        } catch (Exception e) {
             return false;
         }
     }
