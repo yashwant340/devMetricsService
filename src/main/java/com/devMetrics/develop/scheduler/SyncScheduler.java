@@ -23,7 +23,7 @@ public class SyncScheduler {
     public void scheduledSync() {
         log.info("Scheduled sync started");
 
-        List<Repository> repos = repositoryRepository.findAll();
+        List<Repository> repos = repositoryRepository.findByConnectedTrue();
 
         if (repos.isEmpty()) {
             log.info("No repos to sync");

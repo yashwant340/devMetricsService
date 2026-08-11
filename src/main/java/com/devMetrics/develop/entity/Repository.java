@@ -50,6 +50,14 @@ public class Repository {
     @Column(name = "language")
     private String language;
 
+    /**
+     * A disconnected repository remains in the database so its contributors,
+     * pull requests, commits, and metric snapshots retain their foreign keys.
+     */
+    @Builder.Default
+    @Column(name = "connected", nullable = false, columnDefinition = "boolean default true")
+    private boolean connected = true;
+
     @Column(name = "last_synced_at")
     private Instant lastSyncedAt;
 

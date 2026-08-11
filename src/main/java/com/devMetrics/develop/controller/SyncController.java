@@ -35,6 +35,7 @@ public class SyncController {
         User user = (User) auth.getPrincipal();
 
         Repository repo = repositoryRepository.findById(repoId)
+                .filter(Repository::isConnected)
                 .orElseThrow(() ->
                         new RepoNotFoundException("Repo not found"));
 
@@ -56,7 +57,7 @@ public class SyncController {
     public ResponseEntity<?> syncAll(Authentication auth) {
         User user = (User) auth.getPrincipal();
 
-        List<Repository> repos = repositoryRepository.findByOwner(user);
+        List<Repository> repos = repositoryRepository.findByOwnerAndConnectedTrue(user);
 
         repos.forEach(repo ->
                 CompletableFuture.runAsync(() ->

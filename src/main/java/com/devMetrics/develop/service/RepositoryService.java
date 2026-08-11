@@ -22,7 +22,7 @@ public class RepositoryService {
 
     // Return all repos already connected by this user
     public List<Repository> getConnectedRepos(User user) {
-        return repositoryRepository.findByOwner(user);
+        return repositoryRepository.findByOwnerAndConnectedTrue(user);
     }
 
     // Fetch all repos visible to the user from GitHub (for the picker UI)
@@ -33,13 +33,27 @@ public class RepositoryService {
     // Connect a repo: validate it on GitHub, then save it
     public Repository connectRepo(User user, String fullName) {
 
-        // Check not already connected by this user
         GitHubApiService.GitHubRepoDto ghRepo =
                 gitHubApiService.fetchRepo(user.getAccessToken(), fullName);
 
-        if (repositoryRepository.existsByGithubRepoId(ghRepo.id())) {
+        Repository existing = repositoryRepository.findByGithubRepoId(ghRepo.id())
+                .orElse(null);
+        if (existing != null && !existing.getOwner().getId().equals(user.getId())) {
             throw new RepoAlreadyConnectedException(
                     fullName + " is already connected");
+        }
+
+        // Reconnect the original row rather than creating a replacement. This
+        // preserves foreign-key relationships to contributors and other data.
+        if (existing != null) {
+            if (existing.isConnected()) {
+                throw new RepoAlreadyConnectedException(
+                        fullName + " is already connected");
+            }
+            existing.setConnected(true);
+            Repository saved = repositoryRepository.save(existing);
+            log.info("Repo reconnected: {} by user: {}", fullName, user.getLogin());
+            return saved;
         }
 
         Repository repo = Repository.builder()
@@ -53,6 +67,7 @@ public class RepositoryService {
                 .isPrivate(ghRepo.isPrivate())
                 .starsCount(ghRepo.starsCount())
                 .language(ghRepo.language())
+                .connected(true)
                 .build();
 
         Repository saved = repositoryRepository.save(repo);
@@ -60,7 +75,7 @@ public class RepositoryService {
         return saved;
     }
 
-    // Disconnect (delete) a repo
+    // Disconnect without deleting the row or its dependent records.
     public void disconnectRepo(User user, UUID repoId) {
         Repository repo = repositoryRepository.findById(repoId)
                 .orElseThrow(() -> new RepoNotFoundException(
@@ -70,7 +85,8 @@ public class RepositoryService {
             throw new SecurityException("Not your repo");
         }
 
-        repositoryRepository.delete(repo);
+        repo.setConnected(false);
+        repositoryRepository.save(repo);
         log.info("Repo disconnected: {} by user: {}",
                 repo.getFullName(), user.getLogin());
     }

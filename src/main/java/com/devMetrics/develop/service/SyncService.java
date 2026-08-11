@@ -24,7 +24,8 @@ public class SyncService {
     private final PullRequestRepository pullRequestRepository;
     private final PrReviewRepository prReviewRepository;
     private final CommitRepository commitRepository;
-    private final GitHubApiService        gitHubApiService;
+    private final GitHubApiService gitHubApiService;
+    private final MetricsComputationService metricsComputationService;
 
     // Entry point — sync a single repo
     public void syncRepo(Repository repo) {
@@ -50,6 +51,7 @@ public class SyncService {
             // Mark last synced timestamp
             repo.setLastSyncedAt(Instant.now());
             repositoryRepository.save(repo);
+            metricsComputationService.computeAndSnapshot(repo);
 
             log.info("Sync complete for: {}", repo.getFullName());
 
