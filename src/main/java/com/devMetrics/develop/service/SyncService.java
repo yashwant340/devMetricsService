@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
@@ -25,6 +26,7 @@ public class SyncService {
     private final PrReviewRepository prReviewRepository;
     private final CommitRepository commitRepository;
     private final GitHubApiService        gitHubApiService;
+    private final MetricsComputationService metricsComputationService;
 
     // Entry point — sync a single repo
     public void syncRepo(Repository repo) {
@@ -50,6 +52,7 @@ public class SyncService {
             // Mark last synced timestamp
             repo.setLastSyncedAt(Instant.now());
             repositoryRepository.save(repo);
+            metricsComputationService.computeAndSnapshot(repo);
 
             log.info("Sync complete for: {}", repo.getFullName());
 
@@ -165,16 +168,17 @@ public class SyncService {
     // ── Commits ────────────────────────────────────────────────────────
 
     private void syncCommits(Repository repo, String token) {
-        List<GitHubCommitDto> commits = gitHubApiService
-                .fetchCommits(token, repo.getFullName());
+        Instant since = commitRepository
+                .findTopByRepoOrderByCommittedAtDesc(repo)
+                .map(Commit::getCommittedAt)
+                .map(time -> time.minus(1, ChronoUnit.DAYS))
+                .orElse(null);
+
+        List<GitHubCommitDto> commits = since != null
+                ? gitHubApiService.fetchCommits(token, repo.getFullName(), since)
+                : gitHubApiService.fetchCommits(token, repo.getFullName());
 
         for (GitHubCommitDto dto : commits) {
-
-            // Skip if already stored — SHAs are immutable
-            if (commitRepository.existsBySha(dto.sha())) {
-                continue;
-            }
-
             Contributor author = null;
             if (dto.author() != null) {
                 author = resolveContributor(
@@ -203,16 +207,21 @@ public class SyncService {
             String message = dto.commit() != null
                     ? dto.commit().message() : null;
 
-            Commit commit = Commit.builder()
-                    .repo(repo)
-                    .author(author)
-                    .sha(dto.sha())
-                    .message(message)
-                    .additions(additions)
-                    .deletions(deletions)
-                    .changedFiles(changedFiles)
-                    .committedAt(committedAt)
-                    .build();
+            Commit commit = commitRepository.findBySha(dto.sha())
+                    .orElseGet(() -> Commit.builder()
+                            .repo(repo)
+                            .sha(dto.sha())
+                            .build());
+
+            // Preserve already stored values when GitHub doesn't return
+            // anything new, but backfill blanks so churn can compute later.
+            if (commit.getRepo() == null) commit.setRepo(repo);
+            if (author != null) commit.setAuthor(author);
+            if (message != null) commit.setMessage(message);
+            if (committedAt != null) commit.setCommittedAt(committedAt);
+            if (additions != null) commit.setAdditions(additions);
+            if (deletions != null) commit.setDeletions(deletions);
+            if (changedFiles != null) commit.setChangedFiles(changedFiles);
 
             commitRepository.save(commit);
         }
