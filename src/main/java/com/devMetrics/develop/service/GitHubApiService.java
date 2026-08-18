@@ -15,6 +15,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -137,28 +138,24 @@ public class GitHubApiService {
     // Fetch commits for a repo — paginates
     public List<GitHubCommitDto> fetchCommits(
             String accessToken, String fullName) {
-        return fetchCommits(accessToken, fullName, null);
-    }
 
-    public List<GitHubCommitDto> fetchCommits(
-            String accessToken, String fullName, Instant since) {
         List<GitHubCommitDto> all = new ArrayList<>();
         int page = 1;
 
+        // Only sync last 90 days of commits to stay within rate limits
+        String since = Instant.now()
+                .minus(90, ChronoUnit.DAYS)
+                .toString();
+
         while (true) {
             final int p = page;
-            WebClient.RequestHeadersUriSpec<?> request = webClient.get();
-            List<GitHubCommitDto> batch = request
-                    .uri(uriBuilder -> {
-                        var builder = uriBuilder
-                                .path("/repos/" + fullName + "/commits")
-                                .queryParam("per_page", "100")
-                                .queryParam("page", p);
-                        if (since != null) {
-                            builder = builder.queryParam("since", since.toString());
-                        }
-                        return builder.build();
-                    })
+            List<GitHubCommitDto> batch = webClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/repos/" + fullName + "/commits")
+                            .queryParam("per_page", "100")
+                            .queryParam("page", p)
+                            .queryParam("since", since)
+                            .build())
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .bodyToFlux(GitHubCommitDto.class)
