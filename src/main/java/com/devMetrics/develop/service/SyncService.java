@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
@@ -43,7 +44,6 @@ public class SyncService {
                     repo.getFullName());
             return;
         }
-        log.info("Token: {}", token);
         try {
             syncPullRequests(repo, token);
             syncCommits(repo, token);
@@ -167,13 +167,26 @@ public class SyncService {
     // ── Commits ────────────────────────────────────────────────────────
 
     private void syncCommits(Repository repo, String token) {
+        // First sync imports the repository's complete commit history. On
+        // subsequent syncs, ask GitHub only for commits after the newest one
+        // already stored. A small overlap protects against timestamp boundary
+        // timing; SHA de-duplication keeps it safe.
+        Instant since = repo.isCommitHistorySynced()
+                ? commitRepository.findTopByRepoOrderByCommittedAtDesc(repo)
+                        .map(Commit::getCommittedAt)
+                        .filter(committedAt -> committedAt != null)
+                        .map(committedAt -> committedAt.minus(1, ChronoUnit.MINUTES))
+                        .orElse(null)
+                : null;
+
+        log.info("Syncing {} commit history for {}", since == null ? "full" : "incremental", repo.getFullName());
         List<GitHubCommitDto> commits = gitHubApiService
-                .fetchCommits(token, repo.getFullName());
+                .fetchCommits(token, repo.getFullName(), since);
 
         for (GitHubCommitDto dto : commits) {
 
             // Skip if already stored — SHAs are immutable
-            if (commitRepository.existsBySha(dto.sha())) {
+            if (commitRepository.existsByRepoAndSha(repo, dto.sha())) {
                 continue;
             }
 
@@ -217,6 +230,12 @@ public class SyncService {
                     .build();
 
             commitRepository.save(commit);
+        }
+
+        // Only mark complete once all history and its per-commit statistics
+        // were saved successfully. A failed sync will retry the full backfill.
+        if (!repo.isCommitHistorySynced()) {
+            repo.setCommitHistorySynced(true);
         }
     }
 
