@@ -15,9 +15,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @Slf4j
@@ -135,17 +135,13 @@ public class GitHubApiService {
                 .block();
     }
 
-    // Fetch commits for a repo — paginates
+    // Fetch commits for a repo. A null `since` fetches the complete history;
+    // otherwise GitHub returns only commits after that timestamp.
     public List<GitHubCommitDto> fetchCommits(
-            String accessToken, String fullName) {
+            String accessToken, String fullName, Instant since) {
 
         List<GitHubCommitDto> all = new ArrayList<>();
         int page = 1;
-
-        // Only sync last 90 days of commits to stay within rate limits
-        String since = Instant.now()
-                .minus(90, ChronoUnit.DAYS)
-                .toString();
 
         while (true) {
             final int p = page;
@@ -154,7 +150,9 @@ public class GitHubApiService {
                             .path("/repos/" + fullName + "/commits")
                             .queryParam("per_page", "100")
                             .queryParam("page", p)
-                            .queryParam("since", since)
+                            .queryParamIfPresent(
+                                    "since",
+                                    Optional.ofNullable(since).map(Instant::toString))
                             .build())
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()

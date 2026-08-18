@@ -61,6 +61,15 @@ public class Repository {
     @Column(name = "last_synced_at")
     private Instant lastSyncedAt;
 
+    /**
+     * Set only after the complete commit history has been imported. This lets
+     * repositories created before full-history sync was introduced backfill on
+     * their next sync, then use efficient incremental updates afterwards.
+     */
+    @Builder.Default
+    @Column(name = "commit_history_synced", nullable = false, columnDefinition = "boolean default false")
+    private boolean commitHistorySynced = false;
+
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;
 
