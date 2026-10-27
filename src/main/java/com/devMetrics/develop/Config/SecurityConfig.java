@@ -2,14 +2,24 @@ package com.devMetrics.develop.Config;
 
 import com.devMetrics.develop.auth.JwtAuthFilter;
 import com.devMetrics.develop.auth.OAuth2SuccessHandler;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -29,7 +39,9 @@ public class SecurityConfig {
     private String frontendUrl;
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) {
+    public SecurityFilterChain filterChain(
+            HttpSecurity http,
+            ClientRegistrationRepository clientRegistrationRepository) {
         http
                 .cors(cors -> cors
                         .configurationSource(corsConfigurationSource())
@@ -39,11 +51,25 @@ public class SecurityConfig {
                                 "/api/public/**",
                                 "/actuator/health",
                                 "/login/**",
-                                "/oauth2/**"
+                                "/oauth2/**",
+                                // Both work from cookies alone and are needed once the access token has expired
+                                "/api/auth/refresh",
+                                "/api/auth/logout"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
+                // API calls answer 401 so the client can refresh; only page navigations redirect to GitHub
+                .exceptionHandling(exceptions -> exceptions
+                        .defaultAuthenticationEntryPointFor(
+                                new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED),
+                                PathPatternRequestMatcher.withDefaults().matcher("/api/**")
+                        )
+                )
                 .oauth2Login(oauth -> oauth
+                        .authorizationEndpoint(endpoint -> endpoint
+                                .authorizationRequestResolver(
+                                        accountPickerResolver(clientRegistrationRepository))
+                        )
                         .successHandler(oAuth2SuccessHandler)
                         .failureUrl("/login?error=true")
                 )
@@ -59,6 +85,48 @@ public class SecurityConfig {
                 );
 
         return http.build();
+    }
+
+    // GitHub skips straight back to the app when the browser is already signed in;
+    // prompt=select_account makes it show the account picker on every login.
+    // Unknown providers (/oauth2/authorization/<typo>) resolve to null so the request
+    // falls through to a 404 instead of the filter's default 500.
+    static OAuth2AuthorizationRequestResolver accountPickerResolver(
+            ClientRegistrationRepository clientRegistrationRepository) {
+        DefaultOAuth2AuthorizationRequestResolver resolver =
+                new DefaultOAuth2AuthorizationRequestResolver(
+                        clientRegistrationRepository,
+                        OAuth2AuthorizationRequestRedirectFilter.DEFAULT_AUTHORIZATION_REQUEST_BASE_URI
+                );
+        resolver.setAuthorizationRequestCustomizer(request -> request
+                .additionalParameters(params -> params.put("prompt", "select_account"))
+        );
+
+        RequestMatcher authorizationPath = PathPatternRequestMatcher.withDefaults().matcher(
+                OAuth2AuthorizationRequestRedirectFilter.DEFAULT_AUTHORIZATION_REQUEST_BASE_URI
+                        + "/{registrationId}");
+
+        return new OAuth2AuthorizationRequestResolver() {
+            @Override
+            public OAuth2AuthorizationRequest resolve(HttpServletRequest request) {
+                String registrationId = authorizationPath.matcher(request)
+                        .getVariables().get("registrationId");
+                return isKnown(registrationId) ? resolver.resolve(request) : null;
+            }
+
+            @Override
+            public OAuth2AuthorizationRequest resolve(
+                    HttpServletRequest request, String clientRegistrationId) {
+                return isKnown(clientRegistrationId)
+                        ? resolver.resolve(request, clientRegistrationId)
+                        : null;
+            }
+
+            private boolean isKnown(String registrationId) {
+                return registrationId != null
+                        && clientRegistrationRepository.findByRegistrationId(registrationId) != null;
+            }
+        };
     }
 
     @Bean
