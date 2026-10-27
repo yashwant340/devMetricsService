@@ -9,6 +9,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -29,7 +33,9 @@ public class SecurityConfig {
     private String frontendUrl;
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) {
+    public SecurityFilterChain filterChain(
+            HttpSecurity http,
+            ClientRegistrationRepository clientRegistrationRepository) {
         http
                 .cors(cors -> cors
                         .configurationSource(corsConfigurationSource())
@@ -44,6 +50,10 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .oauth2Login(oauth -> oauth
+                        .authorizationEndpoint(endpoint -> endpoint
+                                .authorizationRequestResolver(
+                                        accountPickerResolver(clientRegistrationRepository))
+                        )
                         .successHandler(oAuth2SuccessHandler)
                         .failureUrl("/login?error=true")
                 )
@@ -59,6 +69,21 @@ public class SecurityConfig {
                 );
 
         return http.build();
+    }
+
+    // GitHub skips straight back to the app when the browser is already signed in;
+    // prompt=select_account makes it show the account picker on every login.
+    static OAuth2AuthorizationRequestResolver accountPickerResolver(
+            ClientRegistrationRepository clientRegistrationRepository) {
+        DefaultOAuth2AuthorizationRequestResolver resolver =
+                new DefaultOAuth2AuthorizationRequestResolver(
+                        clientRegistrationRepository,
+                        OAuth2AuthorizationRequestRedirectFilter.DEFAULT_AUTHORIZATION_REQUEST_BASE_URI
+                );
+        resolver.setAuthorizationRequestCustomizer(request -> request
+                .additionalParameters(params -> params.put("prompt", "select_account"))
+        );
+        return resolver;
     }
 
     @Bean
