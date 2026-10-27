@@ -60,6 +60,19 @@ class AccountPickerResolverTest {
     }
 
     @Test
+    void returnsNothingForAnUnknownProviderInsteadOfThrowing() {
+        assertThat(resolve("/oauth2/authorization/nope")).isNull();
+    }
+
+    @Test
+    void returnsNothingForAnUnknownProviderRequestedByName() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/repositories");
+        request.setServletPath("/api/repositories");
+        assertThat(resolver.resolve(request, "nope")).isNull();
+        assertThat(resolver.resolve(request, "github")).isNotNull();
+    }
+
+    @Test
     void ignoresRequestsOutsideTheAuthorizationEndpoint() {
         assertThat(resolve("/api/repositories")).isNull();
     }
